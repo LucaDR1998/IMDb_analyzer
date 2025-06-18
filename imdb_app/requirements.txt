@@ -1,0 +1,14 @@
+lxml
+streamlit
+pandas
+numpy
+plotly
+psycopg2-binary
+requests
+scikit-learn
+selenium
+webdriver-manager
+beautifulsoup4
+transformers
+torch
+flask
