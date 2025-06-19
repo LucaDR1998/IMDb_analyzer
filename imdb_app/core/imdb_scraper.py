@@ -11,9 +11,8 @@ import time
 
 def get_selenium_options():
     options = Options()
-    # options.add_argument("--headless=new") # simulates normal visual rendering
     ## options for docker
-    options.add_argument("--headless")
+    options.add_argument("--headless") # simulates normal visual rendering
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--user-data-dir=/tmp/chrome-user-data")
