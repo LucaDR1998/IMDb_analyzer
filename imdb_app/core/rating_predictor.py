@@ -2,6 +2,7 @@ from sklearn.ensemble import RandomForestRegressor
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.pipeline import make_pipeline
 import numpy as np
+import re
 
 class RatingRegressor:
     def __init__(self):
@@ -27,14 +28,35 @@ class RatingRegressor:
 
 
 def train_and_predict_rating(reviews):
+    def parse_rating(value):
+        if value is None:
+            return None
+
+        text = str(value).strip()
+        if not text or text.upper() == "N/A":
+            return None
+
+        # Handles formats like "10", "10/10", "8.5/10".
+        match = re.search(r"\d+(?:[.,]\d+)?", text)
+        if not match:
+            return None
+
+        numeric = float(match.group(0).replace(",", "."))
+        if numeric < 0 or numeric > 10:
+            return None
+        return numeric
+
     comments = []
     ratings = []
 
     for r in reviews:
-        # include only reviews with both comment and rating
-        if (r["comment"].strip().upper() != "N/A" and r["comment"].strip() and r["rating"]):
-            comments.append(r["comment"])
-            ratings.append(float(r["rating"]))  # IMDb ratings: 1-10
+        comment = str(r.get("comment", "")).strip()
+        parsed_rating = parse_rating(r.get("rating"))
+
+        # include only reviews with both comment and valid rating
+        if comment and comment.upper() != "N/A" and parsed_rating is not None:
+            comments.append(comment)
+            ratings.append(parsed_rating)  # IMDb ratings: 1-10
 
     if not comments:
         return None

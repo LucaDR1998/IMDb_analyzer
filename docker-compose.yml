@@ -1,7 +1,7 @@
 services:
   postgres:
     image: postgres:13
-    restart: always
+    # restart: always
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
@@ -38,7 +38,7 @@ services:
       DB_NAME: ${POSTGRES_DB}
       DB_USER: ${POSTGRES_USER}
       DB_PASSWORD: ${POSTGRES_PASSWORD}
-    restart: on-failure
+    # restart: on-failure
 
 volumes:
   postgres_data:

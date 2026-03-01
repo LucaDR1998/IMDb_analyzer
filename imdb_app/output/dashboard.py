@@ -1,13 +1,32 @@
 import streamlit as st
 import pandas as pd
-from urllib.parse import urljoin
 from collections import Counter
 import plotly.express as px
+import re
 from core.rating_predictor import train_and_predict_rating
 from db.postgre import Postgre
 from core.sentiment_analysis import analyze_sentiment
-from core.imdb_scraper import search_imdb_titles, get_imdb_reviews
+from core.imdb_scraper import search_imdb_titles, get_imdb_reviews, build_imdb_reviews_url
 
+def _format_title_option(result):
+    title = result.get("title", "N/A")
+    year = result.get("year")
+    year_part = f" ({year})" if year and year != "N/A" else ""
+
+    other_info = result.get("other_info") or []
+    if isinstance(other_info, list):
+        other_info = [str(x).strip() for x in other_info if str(x).strip() and str(x).strip() != "N/A"]
+        info_part = f" - {', '.join(other_info)}" if other_info else ""
+    else:
+        info_part = ""
+
+    return f"{title}{year_part}{info_part}"
+
+def _extract_title_id_from_url(url):
+    if not isinstance(url, str):
+        return None
+    match = re.search(r"/title/(tt\d+)", url)
+    return match.group(1) if match else None
 
 def render_metrics_and_pie_chart(counts, average_score):
     labels = list(counts.keys())
@@ -112,56 +131,81 @@ def run_dashboard():
     st.set_page_config(page_title="IMDb Sentiment Dashboard", layout="wide")
     st.title("IMDb Sentiment Analysis Dashboard")
 
-    query = st.text_input("Enter the name of the movie or TV series to search:")
+    if "search_query" not in st.session_state:
+        st.session_state.search_query = ""
+    if "search_results" not in st.session_state:
+        st.session_state.search_results = []
+    if "selected_option" not in st.session_state:
+        st.session_state.selected_option = -1
+    if "reviews_cache" not in st.session_state:
+        st.session_state.reviews_cache = {}
 
-    if query:
-        results = search_imdb_titles(query)
-        if not results:
-            st.warning("No results found for your search.")
-            return
+    query = st.text_input("Enter the name of the movie or TV series to search:", key="query_input")
+    query_clean = (query or "").strip()
 
-        titles = [f"{r['title']} ({r['year']}) {r['other_info']}" for r in results]
-        selected = st.selectbox("Select a title to analyze:", ["-- Select a title --"] + titles)
-        # initialize session state to keep track of selected title
-        if "selected_index" not in st.session_state:
-            st.session_state.selected_index = None
+    if not query_clean:
+        return
 
-        if selected != "-- Select a title --":
-            index = titles.index(selected)
-            # rerun the app if a different title is selected
-            if st.session_state.selected_index != index:
-                st.session_state.selected_index = index
-                st.rerun()
+    if st.session_state.search_query != query_clean:
+        with st.spinner("Searching titles on IMDb..."):
+            st.session_state.search_results = search_imdb_titles(query_clean)
+        st.session_state.search_query = query_clean
+        st.session_state.selected_option = -1
+        st.session_state.reviews_cache = {}
 
-            # build the URL to the reviews page
-            selected_url = results[st.session_state.selected_index]['url']
-            base_url = selected_url.split('?', 1)[0]
-            review_url = urljoin(base_url + '/', 'reviews?ref_=tt_ururv_sm')
+    results = st.session_state.search_results
+    if not results:
+        st.warning("No results found for your search.")
+        return
 
-            st.info("Fetching reviews from IMDb...")
-            reviews = get_imdb_reviews(review_url)
+    option_values = [-1] + list(range(len(results)))
+    selected_idx = st.selectbox(
+        "Select a title to analyze:",
+        options=option_values,
+        format_func=lambda i: "-- Select a title --" if i == -1 else _format_title_option(results[i]),
+        key="selected_option",
+    )
 
-            if not reviews:
-                st.error("No reviews were found for this title.")
-                return
+    if selected_idx == -1:
+        return
 
-            st.success(f"{len(reviews)} reviews retrieved. Starting sentiment analysis with BERT...")
-            comments = [r["comment"] for r in reviews if r["comment"].strip() and r["comment"].strip().upper() != "N/A"]
-            sentiment_results = analyze_sentiment(comments)
+    selected_row = results[selected_idx]
+    selected_url = selected_row.get("url")
+    review_url = build_imdb_reviews_url(selected_url)
+    if not review_url:
+        st.error("Invalid IMDb title URL selected. Please choose another result.")
+        return
 
-            if not sentiment_results:
-                st.error("No results returned from the sentiment model.")
-                return
+    title_id = _extract_title_id_from_url(selected_url) or selected_url
+    if title_id not in st.session_state.reviews_cache:
+        st.info("Fetching reviews from IMDb...")
+        fetched_reviews = get_imdb_reviews(review_url)
+        if fetched_reviews:
+            st.session_state.reviews_cache[title_id] = fetched_reviews
 
-            # calculate aggregated sentiment metrics
-            labels = [r["label"] for r in sentiment_results]
-            scores = [r["score"] for r in sentiment_results if r["score"] is not None]
-            average_score = round(sum(scores) / len(scores), 3) if scores else 0
-            counts = Counter(labels)
+    reviews = st.session_state.reviews_cache.get(title_id, [])
+    if not reviews:
+        selected_label = _format_title_option(selected_row)
+        st.error(f"No reviews were found for selected title: {selected_label}. Try another result from the list.")
+        return
 
-            # render sentiment summary and visualizations
-            render_metrics_and_pie_chart(counts, average_score)
-            df = render_review_table(sentiment_results, reviews)
-            render_time_series(df)
-            st.session_state.selected_movie_title = results[st.session_state.selected_index]['title']
-            render_rating_prediction(reviews)
+    st.success(f"{len(reviews)} reviews retrieved. Starting sentiment analysis with BERT...")
+    comments = [r["comment"] for r in reviews if r["comment"].strip() and r["comment"].strip().upper() != "N/A"]
+    sentiment_results = analyze_sentiment(comments)
+
+    if not sentiment_results:
+        st.error("No results returned from the sentiment model.")
+        return
+
+    # calculate aggregated sentiment metrics
+    labels = [r["label"] for r in sentiment_results]
+    scores = [r["score"] for r in sentiment_results if r["score"] is not None]
+    average_score = round(sum(scores) / len(scores), 3) if scores else 0
+    counts = Counter(labels)
+
+    # render sentiment summary and visualizations
+    render_metrics_and_pie_chart(counts, average_score)
+    df = render_review_table(sentiment_results, reviews)
+    render_time_series(df)
+    st.session_state.selected_movie_title = selected_row.get("title", "Unknown")
+    render_rating_prediction(reviews)
